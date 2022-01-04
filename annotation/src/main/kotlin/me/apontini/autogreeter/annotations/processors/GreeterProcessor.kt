@@ -4,6 +4,8 @@ import com.google.auto.service.AutoService
 import com.squareup.kotlinpoet.*
 import me.apontini.autogreeter.annotations.Greeter
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import javax.annotation.processing.*
 import javax.lang.model.element.TypeElement
 import javax.lang.model.type.ExecutableType
@@ -19,14 +21,17 @@ class GreeterProcessor : AbstractProcessor() {
     }
 
     override fun process(annotations: MutableSet<out TypeElement>?, roundEnv: RoundEnvironment?): Boolean {
-        roundEnv?.getElementsAnnotatedWith(Greeter::class.java)?.map {
-            if ((it.asType() as ExecutableType).parameterTypes.size >= 1) {
+        roundEnv?.getElementsAnnotatedWith(Greeter::class.java)?.map { element ->
+            if ((element.asType() as ExecutableType).parameterTypes.size >= 1) {
                 processingEnv.messager.printMessage(Diagnostic.Kind.ERROR, "Can't process functions with arguments")
             }
-            val monthDay = it.getAnnotation(Greeter::class.java).monthDay //check if pattern is correct
-            val hourMinute = it.getAnnotation(Greeter::class.java).hourMinute //check if pattern is correct
+            val monthDay = element.getAnnotation(Greeter::class.java).monthDay.takeIf { it isFormattedLike "MM-dd" }
+                ?: processingEnv.messager.printMessage(Diagnostic.Kind.ERROR, "Wrong format for month and day")
+            val hourMinute = element.getAnnotation(Greeter::class.java).hourMinute.takeIf { it isFormattedLike "HH:mm" }
+                ?: processingEnv.messager.printMessage(Diagnostic.Kind.ERROR, "Wrong format for hours and minutes")
+
             """
-            async { scheduleGreet("$monthDay","$hourMinute") { ${it.enclosingElement}.${it.simpleName}() } }
+            async { scheduleGreet("$monthDay","$hourMinute") { ${element.enclosingElement}.${element.simpleName}() } }
             """.trimIndent()
         }?.takeIf { it.isNotEmpty() }?.let {
             val funcBuilder = FunSpec.builder("scheduleGreetings")
@@ -35,6 +40,7 @@ class GreeterProcessor : AbstractProcessor() {
             it.forEach { statement -> funcBuilder.addStatement(statement) }
             funcBuilder.endControlFlow()
 
+            //File generation
             FileSpec.builder("", "ScheduledGreetings")
                 .addImport("kotlinx.coroutines", "async", "coroutineScope", "delay")
                 .addImport("java.time", "LocalDateTime", "format.DateTimeFormatterBuilder")
@@ -105,5 +111,12 @@ class GreeterProcessor : AbstractProcessor() {
                 .writeTo(Path(processingEnv.options[KAPT_KOTLIN_GENERATED_OPTION_NAME].orEmpty()))
         }
         return true
+    }
+
+    private infix fun String.isFormattedLike(pattern : String) = try {
+        DateTimeFormatter.ofPattern(pattern).parse(this)
+        true
+    } catch (e : DateTimeParseException) {
+        false
     }
 }
